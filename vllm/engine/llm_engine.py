@@ -252,6 +252,7 @@ class LLMEngine:
             from vllm.executor.gpu_executor import GPUExecutor
             executor_class = GPUExecutor
 
+        # 创建LLM引擎
         # Create the LLM engine.
         engine = cls(
             **engine_config.to_dict(),
@@ -308,6 +309,7 @@ class LLMEngine:
                                                      lora_request=lora_request)
         return prompt_token_ids
 
+    """增加request"""
     def add_request(
         self,
         request_id: str,
@@ -369,8 +371,10 @@ class LLMEngine:
                     and sampling_params.prompt_logprobs > max_logprobs):
             raise ValueError(f"Cannot request more than "
                              f"{max_logprobs} logprobs.")
+        # 设置到达时间
         if arrival_time is None:
             arrival_time = time.time()
+        # encode出token的id
         prompt_token_ids = self.encode_request(
             request_id=request_id,
             prompt=prompt,
@@ -378,10 +382,14 @@ class LLMEngine:
             lora_request=lora_request)
 
         # Create the sequences.
+        # 设置block size 默认16
         block_size = self.cache_config.block_size
+        # 设置seq id
         seq_id = next(self.seq_counter)
+        # 获取表示eos的token id
         eos_token_id = self.tokenizer.get_lora_tokenizer(
             lora_request).eos_token_id
+        # 创建sequence对象
         seq = Sequence(seq_id, prompt, prompt_token_ids, block_size,
                        eos_token_id, lora_request)
 
@@ -393,10 +401,12 @@ class LLMEngine:
         sampling_params.eos_token_id = seq.eos_token_id
 
         # Create the sequence group.
+        # 创建SequenceGroup示例
         seq_group = SequenceGroup(request_id, [seq], sampling_params,
                                   arrival_time, lora_request, multi_modal_data)
 
         # Add the sequence group to the scheduler.
+        # 加入到调度器中
         self.scheduler.add_seq_group(seq_group)
 
     def abort_request(self, request_id: Union[str, Iterable[str]]) -> None:
@@ -484,7 +494,7 @@ class LLMEngine:
         Details:
             - Step 1: Schedules the sequences to be executed in the next
               iteration and the token blocks to be swapped in/out/copy.
-
+                调度下一个要执行的Seq
                 - Depending on the scheduling policy,
                   sequences may be `preempted/reordered`.
                 - A Sequence Group (SG) refer to a group of sequences
@@ -524,7 +534,7 @@ class LLMEngine:
             >>>         break
         """
         seq_group_metadata_list, scheduler_outputs = self.scheduler.schedule()
-
+        # 如果调度结果不为空，则执行序列
         if not scheduler_outputs.is_empty():
             output = self.model_executor.execute_model(
                 seq_group_metadata_list=seq_group_metadata_list,
@@ -534,7 +544,7 @@ class LLMEngine:
                 num_lookahead_slots=scheduler_outputs.num_lookahead_slots)
         else:
             output = []
-
+        # 处理模型输出
         request_outputs = self._process_model_outputs(
             output, scheduler_outputs.scheduled_seq_groups,
             scheduler_outputs.ignored_seq_groups)

@@ -49,6 +49,7 @@ class CacheEngine:
         self.gpu_cache = self._allocate_kv_cache(self.num_gpu_blocks, "cuda")
         self.cpu_cache = self._allocate_kv_cache(self.num_cpu_blocks, "cpu")
 
+    # 分配显存上的物理KV Cache
     def _allocate_kv_cache(
         self,
         num_blocks: int,
@@ -57,9 +58,12 @@ class CacheEngine:
         """Allocates KV cache on the specified device."""
         kv_cache_shape = self.attn_backend.get_kv_cache_shape(
             num_blocks, self.block_size, self.num_heads, self.head_size)
+        # 假如是CPU就设置内存锁定
         pin_memory = is_pin_memory_available() if device == "cpu" else False
+        # 建立一个空表
         kv_cache: List[torch.Tensor] = []
         for _ in range(self.num_layers):
+            # 空张量加入kv cache中
             kv_cache.append(
                 torch.empty(kv_cache_shape,
                             dtype=self.dtype,

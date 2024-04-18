@@ -109,6 +109,7 @@ class LLM:
             disable_custom_all_reduce=disable_custom_all_reduce,
             **kwargs,
         )
+        # 初始化LLMEngine
         self.llm_engine = LLMEngine.from_engine_args(
             engine_args, usage_context=UsageContext.LLM_CLASS)
         self.request_counter = Counter()
@@ -122,6 +123,7 @@ class LLM:
         tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
     ) -> None:
         self.llm_engine.tokenizer.tokenizer = tokenizer
+
 
     def generate(
         self,
@@ -139,9 +141,9 @@ class LLM:
         into a single list and pass it to this method.
 
         Args:
-            prompts: A list of prompts to generate completions for.
+            prompts: A list of prompts to generate completions for. 可以是str或list
             sampling_params: The sampling parameters for text generation. If
-                None, we use the default sampling parameters.
+                None, we use the default sampling parameters. 采样超参
             prompt_token_ids: A list of token IDs for the prompts. If None, we
                 use the tokenizer to convert the prompts to token IDs.
             use_tqdm: Whether to use tqdm to display the progress bar.
@@ -169,6 +171,7 @@ class LLM:
         if multi_modal_data:
             multi_modal_data.data = multi_modal_data.data.to(torch.float16)
 
+        # 将request加入到engine中
         # Add requests to the engine.
         if prompts is not None:
             num_requests = len(prompts)
@@ -176,6 +179,7 @@ class LLM:
             assert prompt_token_ids is not None
             num_requests = len(prompt_token_ids)
 
+        # 每个prompt都加入request中
         for i in range(num_requests):
             prompt = prompts[i] if prompts is not None else None
             token_ids = None if prompt_token_ids is None else prompt_token_ids[
@@ -191,6 +195,7 @@ class LLM:
                     data=multi_modal_data.data[i].unsqueeze(0))
                 if multi_modal_data else None,
             )
+        # 执行推理
         return self._run_engine(use_tqdm)
 
     def _add_request(
@@ -218,8 +223,11 @@ class LLM:
                         dynamic_ncols=True)
         # Run the engine.
         outputs: List[RequestOutput] = []
+        # 假如还有推理在调度器中
         while self.llm_engine.has_unfinished_requests():
+            # 执行一次step（推理调度），决定可以进入的请求。
             step_outputs = self.llm_engine.step()
+            # 完成推理的就装到output
             for output in step_outputs:
                 if output.finished:
                     outputs.append(output)
@@ -230,5 +238,6 @@ class LLM:
         # Sort the outputs by request ID.
         # This is necessary because some requests may be finished earlier than
         # its previous requests.
+        # 按顺序sort一次，因为可能后进去的早完成
         outputs = sorted(outputs, key=lambda x: int(x.request_id))
         return outputs

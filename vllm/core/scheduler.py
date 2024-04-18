@@ -883,6 +883,7 @@ class Scheduler:
         # Schedule sequence groups.
         # This function call changes the internal states of the scheduler
         # such as self.running, self.swapped, and self.waiting.
+        # 调度
         scheduler_outputs = self._schedule()
         now = time.time()
 
@@ -1057,14 +1058,19 @@ class Scheduler:
         for seq in seq_group.get_seqs(status=SequenceStatus.RUNNING):
             seq.status = SequenceStatus.SWAPPED
 
+    # 判断是否调度waiting队列
     def _passed_delay(self, now: float) -> bool:
+        # 假如上次调度选择了从waiting队列中调度
         if self.prev_prompt:
             self.last_prompt_latency = now - self.prev_time
         self.prev_time, self.prev_prompt = now, False
         # Delay scheduling prompts to let waiting queue fill up
+        # delay_factor是用户设置的调整调度间隔的因子，大于0则意味着用户想开启阈值判断
         if self.scheduler_config.delay_factor > 0 and self.waiting:
+            # 计算最早到达的seq_group的到达时间
             earliest_arrival_time = min(
                 [e.metrics.arrival_time for e in self.waiting])
+            # 假如符合条件，则对waiting队列进行调度
             passed_delay = (
                 (now - earliest_arrival_time) >
                 (self.scheduler_config.delay_factor * self.last_prompt_latency)

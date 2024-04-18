@@ -183,7 +183,6 @@ def run_hf(
     end = time.perf_counter()
     return end - start
 
-
 def run_mii(
     requests: List[Tuple[str, int, int]],
     model: str,

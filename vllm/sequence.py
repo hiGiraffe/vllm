@@ -266,17 +266,29 @@ class Sequence:
         self.logical_token_blocks.append(block)
 
     def _append_tokens_to_blocks(self, token_ids: List[int]) -> None:
+        """
+        分配逻辑块
+        @param token_ids:
+        @return:
+        """
         cursor = 0
+        # 遍历每一个token
         while cursor < len(token_ids):
+            # 如果逻辑块列表为空
             if not self.logical_token_blocks:
+                # 先分配一个
                 self._append_logical_block()
-
+            # 取出最后一个槽位
             last_block = self.logical_token_blocks[-1]
+            # 如果该槽位满了
             if last_block.is_full():
+                # append一个逻辑块
                 self._append_logical_block()
+                # 新append的块变成最后一个逻辑块
                 last_block = self.logical_token_blocks[-1]
-
+            # 检查空槽位数量
             num_empty_slots = last_block.get_num_empty_slots()
+            # 尽量填满
             last_block.append_tokens(token_ids[cursor:cursor +
                                                num_empty_slots])
             cursor += num_empty_slots

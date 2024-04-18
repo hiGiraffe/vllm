@@ -17,34 +17,41 @@ class LogicalTokenBlock:
 
     def __init__(
         self,
-        block_number: int,
-        block_size: int,
+        block_number: int,  # 序号
+        block_size: int,    # 逻辑块槽位
     ) -> None:
         self.block_number = block_number
         self.block_size = block_size
-
+        # 逻辑块刚初始化时，将其中的每个token_id都初始化为_BLANK_TOKEN_ID（-1）
         self.token_ids = [_BLANK_TOKEN_ID] * block_size
+        # 当前逻辑块中已经装下的token的数量
         self.num_tokens = 0
 
     def is_empty(self) -> bool:
+        """判断当前逻辑块是为空"""
         return self.num_tokens == 0
 
     def get_num_empty_slots(self) -> int:
+        """当前逻辑块的空余槽位"""
         return self.block_size - self.num_tokens
 
     def is_full(self) -> bool:
+        """判断当前逻辑块是否已经被装满"""
         return self.num_tokens == self.block_size
 
     def append_tokens(self, token_ids: List[int]) -> None:
+        """将给定的一些token_ids装入当前逻辑块中"""
         assert len(token_ids) <= self.get_num_empty_slots()
         curr_idx = self.num_tokens
         self.token_ids[curr_idx:curr_idx + len(token_ids)] = token_ids
         self.num_tokens += len(token_ids)
 
     def get_token_ids(self) -> List[int]:
+        """获取当前逻辑块中所有被装满的位置的token_ids"""
         return self.token_ids[:self.num_tokens]
 
     def get_last_token_id(self) -> int:
+        """获取当前逻辑块所所有被装满的位置的最后一个token_id"""
         assert self.num_tokens > 0
         return self.token_ids[self.num_tokens - 1]
 
