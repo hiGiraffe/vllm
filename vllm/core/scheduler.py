@@ -685,12 +685,14 @@ class Scheduler:
         be swapped or preempted.
         """
         # Include running requests to the budget.
+        # 初始化预算
         budget = SchedulingBudget(
             token_budget=self.scheduler_config.max_num_batched_tokens,
             max_num_seqs=self.scheduler_config.max_num_seqs,
         )
         # Make sure we include num running seqs before scheduling prefill,
         # so that we don't schedule beyond max_num_seqs for prefill.
+        # 对于每个running队列中的seq，加入预算计算
         for seq_group in self.running:
             budget.add_num_seqs(seq_group.request_id,
                                 seq_group.get_max_num_running_seqs())
@@ -706,6 +708,7 @@ class Scheduler:
             self.swapped, SchedulerSwappedInOutputs.create_empty())
 
         # If any requests are swapped, prioritized swapped requests.
+        # 如果swapping队列中没有seq，才会调度waiting中的预训练
         if not self.swapped:
             remaining_waiting, prefills = self._schedule_prefills(
                 self.waiting, budget, curr_loras, enable_chunking=False)
@@ -714,7 +717,9 @@ class Scheduler:
         # Don't schedule decodes if prefills are scheduled.
         # NOTE: If `_schedule_prefills` doesn't enable chunking, self.running
         # only contains decode requests, not chunked prefills.
+        # 如果没有prefill的才开启decode
         if len(prefills.seq_groups) == 0:
+            # 调度running的
             remaining_running, running_scheduled = self._schedule_running(
                 self.running,
                 budget,
@@ -724,6 +729,8 @@ class Scheduler:
 
             # If any sequence group is preempted, do not swap in any sequence
             # group. because it means there's no slot for new running requests.
+            # 如果没有swaped和被抢占的，才调度swaped in的
+            # fixme：这里是重点
             if len(running_scheduled.preempted) + len(
                     running_scheduled.swapped_out) == 0:
                 remaining_swapped, swapped_in = self._schedule_swapped(
@@ -1001,8 +1008,11 @@ class Scheduler:
         # over sequence groups with a single sequence.
         # TODO(woosuk): Support recomputation for sequence groups with multiple
         # sequences. This may require a more sophisticated CUDA kernel.
+        # 如果没有指定抢占的类型
         if preemption_mode is None:
+            # 且在剩余生命周期中并行运行的最大seq数为1
             if seq_group.get_max_num_running_seqs() == 1:
+                # 则重新计算
                 preemption_mode = PreemptionMode.RECOMPUTE
             else:
                 preemption_mode = PreemptionMode.SWAP
@@ -1018,6 +1028,7 @@ class Scheduler:
         self,
         seq_group: SequenceGroup,
     ) -> None:
+        # 把其所有的seq重新计算，且free掉对应的物理块，并将已计算的token数量设置为0
         seqs = seq_group.get_seqs(status=SequenceStatus.RUNNING)
         assert len(seqs) == 1
         for seq in seqs:
@@ -1030,6 +1041,7 @@ class Scheduler:
         seq_group: SequenceGroup,
         blocks_to_swap_out: Dict[int, int],
     ) -> None:
+        # 分配cpu物理块并swap出去
         self._swap_out(seq_group, blocks_to_swap_out)
 
     def _swap_in(
@@ -1047,6 +1059,7 @@ class Scheduler:
         seq_group: SequenceGroup,
         blocks_to_swap_out: Dict[int, int],
     ) -> None:
+        #
         if not self.block_manager.can_swap_out(seq_group):
             # FIXME(woosuk): Abort the sequence group instead of aborting the
             # entire engine.
@@ -1055,6 +1068,7 @@ class Scheduler:
                 "the swap space to avoid this error.")
         mapping = self.block_manager.swap_out(seq_group)
         blocks_to_swap_out.update(mapping)
+        # 将状态修改为swapped
         for seq in seq_group.get_seqs(status=SequenceStatus.RUNNING):
             seq.status = SequenceStatus.SWAPPED
 

@@ -248,18 +248,31 @@ class BlockSpaceManagerV1(BlockSpaceManager):
     def can_allocate(self, seq_group: SequenceGroup) -> AllocStatus:
         # FIXME(woosuk): Here we assume that all sequences in the group share
         # the same prompt. This may not be true for preempted sequences.
+        # 假设了一个seq_group中所有序列的prompt是相同的
+        """
+                可以分配物理块给prefill
+                确实是否可以给这个seq_group分配物理块，返回结果有三种情况：
+                - AllocStatus.NEVER：不分配；
+                - AllocStatus.OK：可以分配；
+                - AllocStatus.LATER：延迟分配
+        """
+        # 取出waiting序列
         seq = seq_group.get_seqs(status=SequenceStatus.WAITING)[0]
+        # 取出逻辑块
         num_required_blocks = len(seq.logical_token_blocks)
-
+        # block上的滑动窗口，先忽略不看
         if self.block_sliding_window is not None:
             num_required_blocks = min(num_required_blocks,
                                       self.block_sliding_window)
+        # 可用的物理块数量
         num_free_gpu_blocks = self.gpu_allocator.get_num_free_blocks()
 
         # Use watermark to avoid frequent cache eviction.
+        # 如果一个seq的prompt太长了，总物理块减去需要的物理块低于水位线，就不分配了
         if (self.num_total_gpu_blocks - num_required_blocks <
                 self.watermark_blocks):
             return AllocStatus.NEVER
+        # 如果可用的空间减去该所需物理块空间，则分配为完成
         if num_free_gpu_blocks - num_required_blocks >= self.watermark_blocks:
             return AllocStatus.OK
         else:
@@ -299,10 +312,12 @@ class BlockSpaceManagerV1(BlockSpaceManager):
                          num_lookahead_slots: int = 0) -> bool:
         assert (num_lookahead_slots == 0
                 ), "lookahead allocation not supported in BlockSpaceManagerV1"
-
+        # 可以分配给decode阶段
         # Simple heuristic: If there is at least one free block
         # for each sequence, we can append.
+        # 可用的token
         num_free_gpu_blocks = self.gpu_allocator.get_num_free_blocks()
+        # 一次推理阶段生成的token
         num_seqs = seq_group.num_seqs(status=SequenceStatus.RUNNING)
         return num_seqs <= num_free_gpu_blocks
 

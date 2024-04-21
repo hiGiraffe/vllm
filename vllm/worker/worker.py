@@ -243,6 +243,7 @@ class Worker(WorkerBase):
         assert blocks_to_swap_in is not None
         assert blocks_to_swap_out is not None
         assert blocks_to_copy is not None
+        # 先换入换出block先
         self.cache_swap(blocks_to_swap_in, blocks_to_swap_out, blocks_to_copy)
 
         # If there is no input, we don't need to execute the model.
