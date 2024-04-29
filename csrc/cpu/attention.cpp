@@ -43,22 +43,23 @@ template <> struct KernelVecType<c10::BFloat16> {
 template <typename T>
 FORCE_INLINE std::pair<T, T> reduceSoftmax(T *data, const int size,
                                            const int capacity) {
+  //获取最大值
   T max = data[0];
   for (int i = 1; i < size; ++i) {
     max = max >= data[i] ? max : data[i];
   }
-
+   //减去max然后求和
   T sum = 0;
   for (int i = 0; i < size; ++i) {
     data[i] = std::exp(data[i] - max);
     sum += data[i];
   }
-
+  //每个data/sum
   int i = 0;
   for (; i < size; ++i) {
     data[i] /= sum;
   }
-
+    //其他赋值为0
   for (; i < capacity; ++i) {
     data[i] = 0;
   }
@@ -124,10 +125,11 @@ struct reduceQKBlockKernel {
   using k_vec_type = typename KernelVecType<scalar_t>::k_vec_type;
   using qk_acc_vec_type = typename KernelVecType<scalar_t>::qk_acc_vec_type;
 
-  constexpr static int TOKEN_PER_GROUP = k_load_vec_type::get_elem_num() / x;
-  constexpr static int MAX_GROUP_NUM = 16 / TOKEN_PER_GROUP;
-  constexpr static int UNROLL_GROUP_NUM = MAX_GROUP_NUM / 4;
+  constexpr static int TOKEN_PER_GROUP = k_load_vec_type::get_elem_num() / x; //一个组要计算的token数目
+  constexpr static int MAX_GROUP_NUM = 16 / TOKEN_PER_GROUP; //block size里面有多少个组
+  constexpr static int UNROLL_GROUP_NUM = MAX_GROUP_NUM / 4; //展开的组？可能是gqa里面的内容
 
+  //可以整除的一些
   static_assert(MAX_GROUP_NUM == 8 || MAX_GROUP_NUM == 4);
   static_assert(k_load_vec_type::get_elem_num() % x == 0);
   static_assert(q_load_vec_type::get_elem_num() * sizeof(scalar_t) == 16);
@@ -136,33 +138,33 @@ struct reduceQKBlockKernel {
                                 const scalar_t *__restrict__ k_block,
                                 float *__restrict__ logits, float scale,
                                 const int token_num) {
-    const int group_num = (token_num + TOKEN_PER_GROUP - 1) / TOKEN_PER_GROUP;
+    const int group_num = (token_num + TOKEN_PER_GROUP - 1) / TOKEN_PER_GROUP; //给每组分token，最后一组可能不满
 
-    qk_acc_vec_type group_accums[MAX_GROUP_NUM];
-    if (token_num == BLOCK_SIZE) {
+    qk_acc_vec_type group_accums[MAX_GROUP_NUM]; //开一个group num的累加器值数组
+    if (token_num == BLOCK_SIZE) { //假如是前面的满了的块
       for (int q_offset = 0; q_offset < HEAD_SIZE;
            q_offset += x, k_block += x * BLOCK_SIZE) {
-        q_load_vec_type q_load_group_vec(q + q_offset);
-        q_vec_type q_group_vec(q_load_group_vec);
+        q_load_vec_type q_load_group_vec(q + q_offset); //读取一个vec q的数据
+        q_vec_type q_group_vec(q_load_group_vec);   //读取一个vec q group的数据
 
-        vec_op::unroll_loop<int, MAX_GROUP_NUM>(
+        vec_op::unroll_loop<int, MAX_GROUP_NUM>( //展开做循环
             [k_block, &q_group_vec, &group_accums](int token_group_idx) {
               k_load_vec_type k_load_group_vec(k_block + token_group_idx * x *
-                                                             TOKEN_PER_GROUP);
-              k_vec_type k_group_vec(k_load_group_vec);
+                                                             TOKEN_PER_GROUP); //读取一个vec k的数据
+              k_vec_type k_group_vec(k_load_group_vec); // 读取一个vec k group的数据
               vec_op::fma(group_accums[token_group_idx], q_group_vec,
-                          k_group_vec);
+                          k_group_vec);// a * b + c
               vec_op::prefetch(k_block + x * BLOCK_SIZE +
-                               token_group_idx * x * TOKEN_PER_GROUP);
+                               token_group_idx * x * TOKEN_PER_GROUP); //数据预取到L1，具体在cpu_types.hpp
             });
       }
-    } else {
+    } else { //假如是不满的块（最后一个有可能）
       for (int q_offset = 0; q_offset < HEAD_SIZE;
            q_offset += x, k_block += x * BLOCK_SIZE) {
         q_load_vec_type q_load_group_vec(q + q_offset);
         q_vec_type q_group_vec(q_load_group_vec);
         for (int token_group_start = 0; token_group_start < group_num;
-             token_group_start += UNROLL_GROUP_NUM) {
+             token_group_start += UNROLL_GROUP_NUM) { //个人认为这里是只对group中有的进行处理
           vec_op::unroll_loop<int, UNROLL_GROUP_NUM>(
               [token_group_start, k_block, &q_group_vec,
                &group_accums](int token_group_idx) {
@@ -186,9 +188,9 @@ struct reduceQKBlockKernel {
             float dot_v =
                 group_accums[token_group_idx]
                     .template reduce_sub_sum<qk_acc_vec_type::get_elem_num() /
-                                             TOKEN_PER_GROUP>(token_idx);
+                                             TOKEN_PER_GROUP>(token_idx); //规约求和
             logits[token_group_idx * TOKEN_PER_GROUP + token_idx] =
-                dot_v * scale;
+                dot_v * scale; //结果加到logit中
           });
     }
   }
@@ -199,14 +201,14 @@ template <typename scalar_t, int HEAD_SIZE, int BLOCK_SIZE,
 FORCE_INLINE void reduceValueBlock(const float *prob, const scalar_t *v_block,
                                    acc_t &&acc) {
   using v_load_vec_type = typename KernelVecType<scalar_t>::v_load_vec_type;
-  constexpr int ELEM_NUM = v_load_vec_type::get_elem_num();
+  constexpr int ELEM_NUM = v_load_vec_type::get_elem_num(); //获取vec_type的元素个数
   static_assert(BLOCK_SIZE == ELEM_NUM);
-  vec_op::FP32Vec16 prob_vec(prob);
+  vec_op::FP32Vec16 prob_vec(prob); //创建概率数组
 
   vec_op::unroll_loop<int, HEAD_PARTITION_SIZE>([&](int head_elem_idx) {
-    v_load_vec_type v_vec(v_block + BLOCK_SIZE * head_elem_idx);
+    v_load_vec_type v_vec(v_block + BLOCK_SIZE * head_elem_idx); //读取v的数据
     vec_op::FP32Vec16 fp32_v_vec(v_vec);
-    acc[head_elem_idx] = acc[head_elem_idx] + prob_vec * fp32_v_vec;
+    acc[head_elem_idx] = acc[head_elem_idx] + prob_vec * fp32_v_vec; //v*概率 累加
   });
 }
 }; // namespace
@@ -248,35 +250,35 @@ struct paged_attention_v1_impl {
                            // [parallel_work_item_num, max_context_len_padded]
 
 #pragma omp parallel for collapse(2) schedule(dynamic, 1)
-    for (int seq_idx = 0; seq_idx < num_seqs; ++seq_idx) {
-      for (int head_idx = 0; head_idx < num_heads; ++head_idx) {
-        int context_len = context_lens[seq_idx];
+    for (int seq_idx = 0; seq_idx < num_seqs; ++seq_idx) { //先循环seq的序号
+      for (int head_idx = 0; head_idx < num_heads; ++head_idx) { //再循环head的序号
+        int context_len = context_lens[seq_idx]; //seq的上下文长度
         const int *seq_block_table =
-            block_tables + max_num_blocks_per_seq * seq_idx;
-        const int block_num = (context_len + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        const int64_t kv_head_idx = head_idx / num_queries_per_kv;
+            block_tables + max_num_blocks_per_seq * seq_idx; //指向seq块表的指针
+        const int block_num = (context_len + BLOCK_SIZE - 1) / BLOCK_SIZE; //进一法获取上下文存在block中的指针
+        const int64_t kv_head_idx = head_idx / num_queries_per_kv; //GQA的优化，每个组内共享的kv heads的个数
         const scalar_t *__restrict__ q_vec_ptr =
-            q + seq_idx * q_stride + head_idx * HEAD_SIZE;
+            q + seq_idx * q_stride + head_idx * HEAD_SIZE; //指向token的q的数据
         const int last_block_token_num =
-            context_len - (block_num - 1) * BLOCK_SIZE;
+            context_len - (block_num - 1) * BLOCK_SIZE; //获取最后一个上下文block中的token数量
         float *__restrict__ thread_block_logits =
-            logits + omp_get_thread_num() * max_context_len_padded;
+            logits + omp_get_thread_num() * max_context_len_padded; //logits缓冲区的矩阵
 
         // Compute logits
-        for (int block_idx = 0; block_idx < block_num; ++block_idx) {
-          const int64_t physical_block_idx = seq_block_table[block_idx];
+        for (int block_idx = 0; block_idx < block_num; ++block_idx) { //对于每一个block的循环
+          const int64_t physical_block_idx = seq_block_table[block_idx]; //物理块地址
           const scalar_t *__restrict__ k_block_cache_ptr =
               k_cache + physical_block_idx * kv_block_stride +
-              kv_head_idx * kv_head_stride;
+              kv_head_idx * kv_head_stride; //物理块的索引
           float *__restrict__ head_block_logits =
-              thread_block_logits + block_idx * BLOCK_SIZE;
+              thread_block_logits + block_idx * BLOCK_SIZE; //logits缓冲块地址
 
           reduceQKBlockKernel<scalar_t, HEAD_SIZE, BLOCK_SIZE, x>::call(
               q_vec_ptr, k_block_cache_ptr, head_block_logits, scale,
-              block_idx == block_num - 1 ? last_block_token_num : BLOCK_SIZE);
+              block_idx == block_num - 1 ? last_block_token_num : BLOCK_SIZE); //计算QK，最后一个块的block数目可能不满
         }
 
-        // Compute softmax
+        // Compute softmax，这里修改了logit中的值
         if (alibi_slopes) {
           reduceSoftmaxAlibi(thread_block_logits, context_len,
                              block_num * BLOCK_SIZE, alibi_slopes[head_idx], 0,
@@ -287,26 +289,26 @@ struct paged_attention_v1_impl {
         }
 
         // Compute value
-        constexpr int head_elem_num_per_partition = 16;
+        constexpr int head_elem_num_per_partition = 16; //每个分区中元素的数量
         constexpr int head_partition_num =
-            HEAD_SIZE / head_elem_num_per_partition;
+            HEAD_SIZE / head_elem_num_per_partition; //一个头有多少个分区
         for (int head_part_idx = 0; head_part_idx < head_partition_num;
-             ++head_part_idx) {
-          vec_op::FP32Vec16 accums[head_elem_num_per_partition];
+             ++head_part_idx) { //遍历每一个分区
+          vec_op::FP32Vec16 accums[head_elem_num_per_partition]; //创建一个累加器的数组，累加结果
           scalar_t *__restrict__ out_ptr =
               out + seq_idx * num_heads * HEAD_SIZE + head_idx * HEAD_SIZE +
-              head_part_idx * head_elem_num_per_partition;
-          for (int block_idx = 0; block_idx < block_num; ++block_idx) {
-            const int64_t physical_block_idx = seq_block_table[block_idx];
+              head_part_idx * head_elem_num_per_partition; //输出的地址
+          for (int block_idx = 0; block_idx < block_num; ++block_idx) { //对于每一块
+            const int64_t physical_block_idx = seq_block_table[block_idx]; //获取物理地址
             const float *__restrict__ prob_vec_ptr =
-                thread_block_logits + block_idx * BLOCK_SIZE;
+                thread_block_logits + block_idx * BLOCK_SIZE; //概率向量
             const scalar_t *__restrict__ v_block_cache_ptr =
                 v_cache + physical_block_idx * kv_block_stride +
                 kv_head_idx * kv_head_stride +
-                BLOCK_SIZE * head_part_idx * head_elem_num_per_partition;
+                BLOCK_SIZE * head_part_idx * head_elem_num_per_partition; //获取block的物理地址
             reduceValueBlock<scalar_t, HEAD_SIZE, BLOCK_SIZE,
                              head_elem_num_per_partition>(
-                prob_vec_ptr, v_block_cache_ptr, accums);
+                prob_vec_ptr, v_block_cache_ptr, accums); //计算Value
 
             if (block_idx != block_num - 1) {
               const int64_t next_physical_block_idx =
@@ -320,15 +322,15 @@ struct paged_attention_v1_impl {
                     if (head_elem_idx % 2 == 0) {
                       vec_op::prefetch(next_v_block_cache_ptr +
                                        BLOCK_SIZE * head_elem_idx);
-                    }
+                    }// 数据预取
                   });
             }
           }
 
           vec_op::unroll_loop<int, head_elem_num_per_partition>(
               [&](int head_elem_idx) {
-                float value = accums[head_elem_idx].reduce_sum();
-                vec_op::storeFP32(value, out_ptr + head_elem_idx);
+                float value = accums[head_elem_idx].reduce_sum();//求和得出value结果
+                vec_op::storeFP32(value, out_ptr + head_elem_idx); //存到数据中
               });
         }
       }
