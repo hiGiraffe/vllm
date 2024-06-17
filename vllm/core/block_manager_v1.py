@@ -278,25 +278,29 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         else:
             return AllocStatus.LATER
 
-    def allocate(self, seq_group: SequenceGroup) -> None:
+    def allocate(self, seq_group: SequenceGroup) -> None: # 做prefill
         # NOTE: Here we assume that all sequences in the group have the same
         # prompt.
         seq = seq_group.get_seqs(status=SequenceStatus.WAITING)[0]
 
         # Allocate new physical token blocks that will store the prompt tokens.
+        # prefill阶段是相等的。
         num_prompt_blocks = len(seq.logical_token_blocks)
 
         block_table: BlockTable = []
         for logical_idx in range(num_prompt_blocks):
+            # 如果使用了滑动窗口
             if (self.block_sliding_window is not None
                     and logical_idx >= self.block_sliding_window):
                 block = block_table[logical_idx % self.block_sliding_window]
                 # Set the reference counts of the token blocks.
                 block.ref_count = seq_group.num_seqs()
+            # 如果使用prefix caching
             elif self.enable_caching:
                 block = self.gpu_allocator.allocate(
                     seq.hash_of_block(logical_idx),
                     seq.num_hashed_tokens_of_block(logical_idx))
+            # 其余情况，UncachedBlockAllocator
             else:
                 block = self.gpu_allocator.allocate()
                 # Set the reference counts of the token blocks.
@@ -392,7 +396,9 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         num_lookahead_slots: int = 0,
     ) -> Dict[int, List[int]]:
         """Allocate a physical slot for a new token."""
+        # 获取seq逻辑块
         logical_blocks = seq.logical_token_blocks
+        # 获取seq物理块
         block_table = self.block_tables[seq.seq_id]
         # If we need to allocate a new physical block
         if len(block_table) < len(logical_blocks):

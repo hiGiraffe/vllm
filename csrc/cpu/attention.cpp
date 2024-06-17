@@ -127,7 +127,7 @@ struct reduceQKBlockKernel {
 
   constexpr static int TOKEN_PER_GROUP = k_load_vec_type::get_elem_num() / x; //一个组要计算的token数目
   constexpr static int MAX_GROUP_NUM = 16 / TOKEN_PER_GROUP; //block size里面有多少个组
-  constexpr static int UNROLL_GROUP_NUM = MAX_GROUP_NUM / 4; //展开的组？可能是gqa里面的内容
+  constexpr static int UNROLL_GROUP_NUM = MAX_GROUP_NUM / 4; //展开的组？fixme:可能是gqa里面的内容
 
   //可以整除的一些
   static_assert(MAX_GROUP_NUM == 8 || MAX_GROUP_NUM == 4);
@@ -147,13 +147,13 @@ struct reduceQKBlockKernel {
         q_load_vec_type q_load_group_vec(q + q_offset); //读取一个vec q的数据
         q_vec_type q_group_vec(q_load_group_vec);   //读取一个vec q group的数据
 
-        vec_op::unroll_loop<int, MAX_GROUP_NUM>( //展开做循环
+        vec_op::unroll_loop<int, MAX_GROUP_NUM>( //展开做循环 fixme:晚点看
             [k_block, &q_group_vec, &group_accums](int token_group_idx) {
               k_load_vec_type k_load_group_vec(k_block + token_group_idx * x *
                                                              TOKEN_PER_GROUP); //读取一个vec k的数据
               k_vec_type k_group_vec(k_load_group_vec); // 读取一个vec k group的数据
               vec_op::fma(group_accums[token_group_idx], q_group_vec,
-                          k_group_vec);// a * b + c
+                          k_group_vec);// a+= b *c
               vec_op::prefetch(k_block + x * BLOCK_SIZE +
                                token_group_idx * x * TOKEN_PER_GROUP); //数据预取到L1，具体在cpu_types.hpp
             });
@@ -252,6 +252,7 @@ struct paged_attention_v1_impl {
 #pragma omp parallel for collapse(2) schedule(dynamic, 1)
     for (int seq_idx = 0; seq_idx < num_seqs; ++seq_idx) { //先循环seq的序号
       for (int head_idx = 0; head_idx < num_heads; ++head_idx) { //再循环head的序号
+      //一个seq一个head
         int context_len = context_lens[seq_idx]; //seq的上下文长度
         const int *seq_block_table =
             block_tables + max_num_blocks_per_seq * seq_idx; //指向seq块表的指针
@@ -262,9 +263,9 @@ struct paged_attention_v1_impl {
         const int last_block_token_num =
             context_len - (block_num - 1) * BLOCK_SIZE; //获取最后一个上下文block中的token数量
         float *__restrict__ thread_block_logits =
-            logits + omp_get_thread_num() * max_context_len_padded; //logits缓冲区的矩阵
+            logits + omp_get_thread_num() * max_context_len_padded; //logits缓冲区的矩阵地址
 
-        // Compute logits
+        // Compute logits 一个seq里多个block
         for (int block_idx = 0; block_idx < block_num; ++block_idx) { //对于每一个block的循环
           const int64_t physical_block_idx = seq_block_table[block_idx]; //物理块地址
           const scalar_t *__restrict__ k_block_cache_ptr =
@@ -293,7 +294,7 @@ struct paged_attention_v1_impl {
         constexpr int head_partition_num =
             HEAD_SIZE / head_elem_num_per_partition; //一个头有多少个分区
         for (int head_part_idx = 0; head_part_idx < head_partition_num;
-             ++head_part_idx) { //遍历每一个分区
+             ++head_part_idx) { //遍历每一个分区 fixme:
           vec_op::FP32Vec16 accums[head_elem_num_per_partition]; //创建一个累加器的数组，累加结果
           scalar_t *__restrict__ out_ptr =
               out + seq_idx * num_heads * HEAD_SIZE + head_idx * HEAD_SIZE +

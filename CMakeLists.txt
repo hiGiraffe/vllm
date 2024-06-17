@@ -85,6 +85,7 @@ find_library(torch_python_LIBRARY torch_python PATHS
 if (NOT VLLM_TARGET_DEVICE STREQUAL "cuda" AND
     NOT VLLM_TARGET_DEVICE STREQUAL "rocm")
     if (VLLM_TARGET_DEVICE STREQUAL "cpu")
+
         include(${CMAKE_CURRENT_LIST_DIR}/cmake/cpu_extension.cmake)
     else()
         message(FATAL_ERROR "Unsupported vLLM target device: ${VLLM_TARGET_DEVICE}")
